@@ -614,8 +614,9 @@ func TestChainPickerAliasesAndErrorReset(t *testing.T) {
 	}
 }
 
-func TestChainPickerOfficialNameAndPaidOnlyLabel(t *testing.T) {
+func TestChainPickerOfficialNameAndStatusLabel(t *testing.T) {
 	m := chainPickerModel(func(string) (string, string, error) { return "", "", nil })
+	m.cfg.Chains[1].Status = "degraded"
 	m.cfg.Chains[1].PaidOnly = true
 	m.openChainPicker()
 	m.chainFilter = "Polygon Mainnet"
@@ -624,8 +625,8 @@ func TestChainPickerOfficialNameAndPaidOnlyLabel(t *testing.T) {
 		t.Fatalf("official display-name filter did not find polygon: %+v", got)
 	}
 	view := m.viewChainPicker()
-	if !strings.Contains(view, "Polygon Mainnet (137)") || !strings.Contains(view, "(paid only)") {
-		t.Fatalf("picker missing official name or tier label:\n%s", view)
+	if !strings.Contains(view, "Polygon Mainnet (137)") || !strings.Contains(view, "(paid only) (degraded)") {
+		t.Fatalf("picker missing official name or status label:\n%s", view)
 	}
 }
 

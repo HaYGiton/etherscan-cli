@@ -108,6 +108,7 @@ type ChainInfo struct {
 	Aliases     []string
 	Testnet     bool
 	PaidOnly    bool
+	Status      string
 }
 
 // Run launches the full-screen explorer and blocks until the user quits.
@@ -793,6 +794,9 @@ func (m model) viewChainPicker() string {
 			suffix := ""
 			if c.PaidOnly {
 				suffix = " (paid only)"
+			}
+			if c.Status == "degraded" || c.Status == "offline" {
+				suffix += " (" + c.Status + ")"
 			}
 			if i == idx {
 				b.WriteString(selSt.Render("› "+line+suffix) + "\n")

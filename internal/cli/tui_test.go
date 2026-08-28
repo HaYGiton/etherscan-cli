@@ -22,7 +22,7 @@ import (
 // validation error therefore proves the guard runs before any request.
 func TestTuiExecValidatesBeforeCall(t *testing.T) {
 	_, index := tuiEndpoints()
-	rt := resolvedRuntime{chain: chains.Chain{ID: "1", Name: "ethereum"}}
+	rt := resolvedRuntime{chain: chains.Chain{ID: "1", Name: "ethereum"}, registry: testCLIRegistry(t)}
 	exec := tuiExec(&rt, index)
 
 	valid := "0x80f3950a4d371c43360f292a4170624abd9eed03"
@@ -40,7 +40,7 @@ func TestTuiExecValidatesBeforeCall(t *testing.T) {
 // reaching the (nil) client.
 func TestTuiExecMainnetOnlyGuard(t *testing.T) {
 	_, index := tuiEndpoints()
-	rt := resolvedRuntime{chain: chains.Chain{ID: "56", Name: "bsc"}}
+	rt := resolvedRuntime{chain: chains.Chain{ID: "56", Name: "bsc"}, registry: testCLIRegistry(t)}
 	exec := tuiExec(&rt, index)
 
 	_, err := exec(context.Background(), "stats", "ethsupply2", map[string]string{})
@@ -57,7 +57,7 @@ func TestTuiExecMainnetOnlyGuard(t *testing.T) {
 // chainlist (no wire params) through trivially.
 func TestTuiValidate(t *testing.T) {
 	_, index := tuiEndpoints()
-	rt := resolvedRuntime{chain: chains.Chain{ID: "1", Name: "ethereum"}}
+	rt := resolvedRuntime{chain: chains.Chain{ID: "1", Name: "ethereum"}, registry: testCLIRegistry(t)}
 	validate := tuiValidate(&rt, index)
 
 	valid := "0x80f3950a4d371c43360f292a4170624abd9eed03"
@@ -86,7 +86,7 @@ func TestTuiValidate(t *testing.T) {
 // re-gates MainnetOnly endpoints without rebuilding the closure.
 func TestTuiValidateReflectsChainSwitch(t *testing.T) {
 	_, index := tuiEndpoints()
-	rt := resolvedRuntime{chain: chains.Chain{ID: "1", Name: "ethereum"}}
+	rt := resolvedRuntime{chain: chains.Chain{ID: "1", Name: "ethereum"}, registry: testCLIRegistry(t)}
 	validate := tuiValidate(&rt, index)
 
 	if err := validate("stats", "ethsupply2", map[string]string{}); err != nil {
@@ -168,8 +168,9 @@ func TestTuiExecChainList(t *testing.T) {
 	defer srv.Close()
 
 	rt := resolvedRuntime{
-		client: client.New(client.Options{BaseURL: srv.URL + "/v2/api", ChainID: "1", RateLimit: 1000}),
-		chain:  chains.Chain{ID: "1", Name: "ethereum"},
+		client:   client.New(client.Options{BaseURL: srv.URL + "/v2/api", ChainID: "1", RateLimit: 1000}),
+		chain:    chains.Chain{ID: "1", Name: "ethereum"},
+		registry: testCLIRegistry(t),
 	}
 	// Empty index on purpose: chainlist must not need a spec entry.
 	exec := tuiExec(&rt, map[string]EndpointSpec{})
@@ -217,9 +218,8 @@ func TestTuiChainListEntry(t *testing.T) {
 }
 
 func TestTuiChainsPreservesSupportedChainMetadata(t *testing.T) {
-	all := tuiChains()
-	// Tracks the registry count, which excludes the deprecated Moonbeam family.
-	if len(all) != 61 || all[0].DisplayName != "Ethereum Mainnet" || all[len(all)-1].DisplayName != "MegaETH Testnet" {
+	all := tuiChains(testCLIRegistry(t))
+	if len(all) != len(testChainRows) || all[0].DisplayName != "Ethereum Mainnet" || all[len(all)-1].DisplayName != "Abstract Sepolia Testnet" {
 		t.Fatalf("TUI chains do not follow supported-chains order: count=%d first=%q last=%q", len(all), all[0].DisplayName, all[len(all)-1].DisplayName)
 	}
 	for _, chain := range all {
@@ -229,13 +229,8 @@ func TestTuiChainsPreservesSupportedChainMetadata(t *testing.T) {
 		if !slices.Contains(chain.Aliases, "matic") {
 			t.Fatalf("polygon aliases missing matic: %v", chain.Aliases)
 		}
-		if chain.DisplayName != "Polygon Mainnet" || chain.PaidOnly {
+		if chain.DisplayName != "Polygon Mainnet" || chain.Status != "ok" {
 			t.Fatalf("polygon metadata incorrect: %+v", chain)
-		}
-		for _, paid := range all {
-			if paid.Name == "base" && !paid.PaidOnly {
-				t.Fatalf("base must be marked paid-only: %+v", paid)
-			}
 		}
 		return
 	}
