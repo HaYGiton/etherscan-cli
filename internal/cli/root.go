@@ -250,6 +250,9 @@ type resolvedRuntime struct {
 	format   output.Format
 	chain    chains.Chain
 	registry *chains.Registry
+	// registryNotice is set when registry came from chains.Fallback() instead of
+	// the API, so the TUI can say so where the stale list is actually read.
+	registryNotice string
 }
 
 // errNoAPIKey is returned by runtime() when no key is resolved. An API key is
@@ -279,6 +282,11 @@ func runtime(ctx context.Context, state *globalState) (resolvedRuntime, error) {
 	return buildRuntime(ctx, state, cfg, key, false)
 }
 
+// degradedChainListNotice is shown in the TUI switcher when the chain list could
+// not be fetched. It stays short on purpose: the switcher is not the place for a
+// transport error, and `etherscan chains` reports the real failure.
+const degradedChainListNotice = "offline list — newer chains may be missing"
+
 // buildRuntime constructs the shared runtime from already-loaded configuration.
 // Most CLI commands call runtime(), which rejects an empty key first. The TUI is
 // the sole caller allowed to pass an empty key so users can browse before setup.
@@ -295,12 +303,21 @@ func buildRuntime(ctx context.Context, state *globalState, cfg config.File, key 
 	chainInput := firstNonEmpty(state.chain, os.Getenv("ETHERSCAN_CHAIN"), cfg.DefaultChain, "1")
 	var registry *chains.Registry
 	var chain chains.Chain
+	var registryNotice string
 	if forceRegistry {
 		registry, err = fetchChainRegistry(ctx, baseClient)
 		if err != nil {
-			return resolvedRuntime{}, err
+			// Degrade rather than refuse to start. The chain list only populates the
+			// TUI's switcher and its metadata: requests are routed by chainid against
+			// the shared base URL, so an unreachable chainlist costs labels, not the
+			// ability to call anything. Resolve the active chain locally so a chain
+			// newer than this release still opens the explorer.
+			registry = chains.Fallback()
+			registryNotice = degradedChainListNotice
+			chain, err = chains.ResolveLocal(chainInput)
+		} else {
+			chain, err = registry.Resolve(chainInput)
 		}
-		chain, err = registry.Resolve(chainInput)
 		if err != nil {
 			return resolvedRuntime{}, err
 		}
@@ -312,6 +329,7 @@ func buildRuntime(ctx context.Context, state *globalState, cfg config.File, key 
 	}
 	return resolvedRuntime{
 		client: baseClient.ForChain(chain.ID), format: format, chain: chain, registry: registry,
+		registryNotice: registryNotice,
 	}, nil
 }
 
@@ -662,13 +680,30 @@ func chainsCommand(state *globalState) *cobra.Command {
 	}}
 }
 
+// chainLabel renders a resolved chain for display. Chains in the compatibility
+// table carry a slug worth showing next to the ID; a chain addressed only by ID
+// resolves with Name == ID, so print the ID on its own.
+func chainLabel(chain chains.Chain) string {
+	if chain.Name == "" || chain.Name == chain.ID {
+		return chain.ID
+	}
+	return fmt.Sprintf("%s (%s)", chain.Name, chain.ID)
+}
+
 func whoamiCommand(state *globalState) *cobra.Command {
 	return &cobra.Command{Use: "whoami", Short: "Show the active chain and saved API key", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, _, err := config.Load()
 		if err != nil {
 			return err
 		}
-		configuredChain := firstNonEmpty(state.chain, os.Getenv("ETHERSCAN_CHAIN"), cfg.DefaultChain, "1")
+		// Resolve offline so whoami stays network-free (see
+		// TestWhoamiDoesNotFetchChainList) while still agreeing with the resolution
+		// every other command performs: a chain the CLI would reject must not be
+		// reported here as if it were active.
+		chain, err := chains.ResolveLocal(firstNonEmpty(state.chain, os.Getenv("ETHERSCAN_CHAIN"), cfg.DefaultChain, "1"))
+		if err != nil {
+			return err
+		}
 		key := state.apiKey
 		if key == "" {
 			key, _ = config.GetAPIKey(cfg)
@@ -677,7 +712,7 @@ func whoamiCommand(state *globalState) *cobra.Command {
 		if key != "" {
 			keyDisplay = maskKey(key)
 		}
-		fmt.Fprintf(os.Stdout, "chain:   %s\napi key: %s\n", configuredChain, keyDisplay)
+		fmt.Fprintf(os.Stdout, "chain:   %s\napi key: %s\n", chainLabel(chain), keyDisplay)
 		fmt.Fprintln(os.Stderr, "(run 'etherscan apilimit' for credit usage)")
 		return nil
 	}}
@@ -867,16 +902,17 @@ func launchTUI(ctx context.Context, state *globalState, info BuildInfo) error {
 		return maskKey(key), nil
 	}
 	return tui.Run(ctx, tui.Config{
-		Endpoints:   eps,
-		Exec:        tuiExec(&rt, index),
-		Validate:    tuiValidate(&rt, index),
-		ChainName:   rt.chain.DisplayName,
-		ChainID:     rt.chain.ID,
-		KeyLabel:    keyLabel,
-		HasAPIKey:   key != "",
-		SaveAPIKey:  saveKey,
-		Chains:      tuiChains(rt.registry),
-		SwitchChain: switchChain,
+		Endpoints:    eps,
+		Exec:         tuiExec(&rt, index),
+		Validate:     tuiValidate(&rt, index),
+		ChainName:    rt.chain.DisplayName,
+		ChainID:      rt.chain.ID,
+		KeyLabel:     keyLabel,
+		HasAPIKey:    key != "",
+		SaveAPIKey:   saveKey,
+		Chains:       tuiChains(rt.registry),
+		ChainsNotice: rt.registryNotice,
+		SwitchChain:  switchChain,
 	})
 }
 
@@ -887,7 +923,7 @@ func tuiChains(registry *chains.Registry) []tui.ChainInfo {
 	for _, c := range all {
 		out = append(out, tui.ChainInfo{
 			Name: c.Name, DisplayName: c.DisplayName, ID: c.ID,
-			Aliases: append([]string(nil), c.Aliases...), Testnet: c.Testnet,
+			Aliases:  append([]string(nil), c.Aliases...),
 			PaidOnly: c.FreeTier == chains.FreeTierPaidOnly, Status: chains.StatusName(c.Status),
 		})
 	}

@@ -186,3 +186,59 @@ func TestRegistryRejectsInvalidResponses(t *testing.T) {
 		})
 	}
 }
+
+// Fallback is the degraded chain list used when the chainlist endpoint is
+// unreachable. It must be usable as a registry without any network access.
+func TestFallbackRegistry(t *testing.T) {
+	registry := Fallback()
+	all := registry.All()
+	if len(all) == 0 {
+		t.Fatal("fallback registry is empty")
+	}
+
+	for _, input := range []string{"base", "8453", "0008453", "matic", "137", "ethereum", ""} {
+		chain, err := registry.Resolve(input)
+		if err != nil {
+			t.Fatalf("Resolve(%q) against fallback: %v", input, err)
+		}
+		if chain.ID == "" || chain.Name == "" {
+			t.Fatalf("Resolve(%q) returned an incomplete chain: %+v", input, chain)
+		}
+	}
+
+	// Liveness is exactly what could not be fetched, so no row may claim a status.
+	for _, chain := range all {
+		if chain.Status != StatusUnknown {
+			t.Fatalf("chain %s has status %d, want StatusUnknown", chain.ID, chain.Status)
+		}
+		if StatusName(chain.Status) != "unknown" {
+			t.Fatalf("chain %s renders status %q, want \"unknown\"", chain.ID, StatusName(chain.Status))
+		}
+	}
+
+	// A chain added after this release is not in the table; it stays reachable by
+	// ID through ResolveLocal, which is what the degraded path resolves with.
+	if _, err := registry.Resolve("424242"); err == nil {
+		t.Fatal("fallback registry resolved a chain it cannot know about")
+	}
+	if _, err := ResolveLocal("424242"); err != nil {
+		t.Fatalf("ResolveLocal must still accept a numeric ID: %v", err)
+	}
+}
+
+// Map iteration is randomised, so an unsorted Fallback would reorder the TUI's
+// switcher on every launch.
+func TestFallbackOrderIsStable(t *testing.T) {
+	first := Fallback().All()
+	for range 5 {
+		next := Fallback().All()
+		if len(next) != len(first) {
+			t.Fatalf("length changed between calls: %d then %d", len(first), len(next))
+		}
+		for i := range first {
+			if next[i].ID != first[i].ID {
+				t.Fatalf("order changed at index %d: %s then %s", i, first[i].ID, next[i].ID)
+			}
+		}
+	}
+}

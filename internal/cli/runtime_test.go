@@ -196,3 +196,87 @@ func TestResolveKeyPrecedence(t *testing.T) {
 		t.Fatalf("expected empty key, got %q", got)
 	}
 }
+
+// An unreachable chainlist endpoint must not stop the TUI from opening. The
+// chain list only populates the switcher — requests route by chainid against the
+// shared base URL — so the runtime degrades to the chains compiled into this
+// release and reports why, rather than failing.
+func TestBuildRuntimeFallsBackWhenChainListFails(t *testing.T) {
+	t.Setenv("ETHERSCAN_API_KEY", "")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "chainlist unavailable", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	for _, tc := range []struct{ chain, wantID string }{
+		{"", "1"},
+		{"base", "8453"},
+		{"137", "137"},
+		// A chain newer than this release is absent from the fallback list but must
+		// still open the explorer, since it is addressable by ID.
+		{"424242", "424242"},
+	} {
+		t.Run(tc.chain, func(t *testing.T) {
+			state := &globalState{timeout: 5 * time.Second, rate: 3, baseURL: server.URL + "/v2/api", chain: tc.chain}
+			rt, err := buildRuntime(context.Background(), state, config.File{}, "TESTKEY", true)
+			if err != nil {
+				t.Fatalf("runtime failed instead of degrading: %v", err)
+			}
+			if rt.chain.ID != tc.wantID {
+				t.Fatalf("chain ID = %q, want %q", rt.chain.ID, tc.wantID)
+			}
+			if rt.registry == nil || len(rt.registry.All()) == 0 {
+				t.Fatal("degraded runtime has no chain list for the switcher")
+			}
+			// The switcher must say the list is not live, or a chain missing from it
+			// reads as unsupported rather than newer than this build.
+			if rt.registryNotice != degradedChainListNotice {
+				t.Fatalf("notice = %q, want %q", rt.registryNotice, degradedChainListNotice)
+			}
+			// Nothing may claim liveness that was never fetched.
+			for _, c := range tuiChains(rt.registry) {
+				if c.Status != "unknown" {
+					t.Fatalf("chain %s reports status %q in degraded mode", c.ID, c.Status)
+				}
+			}
+		})
+	}
+}
+
+// The notice is only for the degraded path: a successful fetch must not warn.
+func TestBuildRuntimeSetsNoNoticeOnLiveChainList(t *testing.T) {
+	t.Setenv("ETHERSCAN_API_KEY", "")
+	server := newChainListServer(t)
+	defer server.Close()
+	state := &globalState{timeout: 5 * time.Second, rate: 3, baseURL: server.URL + "/v2/api"}
+	rt, err := buildRuntime(context.Background(), state, config.File{}, "TESTKEY", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.registryNotice != "" {
+		t.Fatalf("live chain list set a degradation notice: %q", rt.registryNotice)
+	}
+}
+
+// Ordinary commands never fetch the chain list, so a chainlist outage must not
+// change their behaviour or quietly hand them a fallback registry.
+func TestBuildRuntimeWithoutRegistryIgnoresChainListOutage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("ordinary command reached the network during runtime setup")
+	}))
+	defer server.Close()
+	state := &globalState{timeout: 5 * time.Second, rate: 3, baseURL: server.URL + "/v2/api", chain: "base"}
+	rt, err := buildRuntime(context.Background(), state, config.File{}, "TESTKEY", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.registry != nil {
+		t.Fatal("ordinary command was given a chain registry")
+	}
+	if rt.registryNotice != "" {
+		t.Fatalf("ordinary command got a degradation notice: %q", rt.registryNotice)
+	}
+	if rt.chain.ID != "8453" {
+		t.Fatalf("chain ID = %q, want 8453", rt.chain.ID)
+	}
+}

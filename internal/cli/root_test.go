@@ -128,3 +128,117 @@ func TestOrdinaryCommandsDoNotFetchChainList(t *testing.T) {
 		})
 	}
 }
+
+// whoami must agree with the resolution every other command performs: before
+// this was fixed it echoed the raw flag/env/config string, so an unresolvable
+// chain was reported as active and the command exited 0.
+func TestWhoamiRejectsUnresolvableChain(t *testing.T) {
+	for _, source := range []string{"flag", "env", "config"} {
+		t.Run(source, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			cfg := config.File{DefaultChain: "1", APIKey: "TESTKEY"}
+			args := []string{"whoami"}
+			switch source {
+			case "flag":
+				args = []string{"--chain", "future-chain", "whoami"}
+			case "env":
+				t.Setenv("ETHERSCAN_CHAIN", "future-chain")
+			case "config":
+				cfg.DefaultChain = "future-chain"
+			}
+			if _, err := config.Save(cfg); err != nil {
+				t.Fatal(err)
+			}
+
+			root := newRootCommand(BuildInfo{}, &fakeUpdateManager{})
+			root.SetArgs(args)
+			err := root.Execute()
+			if err == nil {
+				t.Fatal("whoami accepted an unresolvable chain")
+			}
+			if !strings.Contains(err.Error(), "numeric chain ID") {
+				t.Fatalf("error = %v, want the ResolveLocal guidance", err)
+			}
+		})
+	}
+}
+
+// whoami reports the resolved chain, not the raw input: legacy names and
+// non-canonical IDs both have to surface the chain ID requests will carry.
+func TestWhoamiReportsResolvedChain(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"base", "chain:   base (8453)"},
+		{"0008453", "chain:   base (8453)"},
+		{"matic", "chain:   polygon (137)"},
+		{"424242", "chain:   424242"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			if _, err := config.Save(config.File{DefaultChain: "1", APIKey: "TESTKEY"}); err != nil {
+				t.Fatal(err)
+			}
+			capture := filepath.Join(t.TempDir(), "stdout")
+			file, err := os.Create(capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalStdout := os.Stdout
+			os.Stdout = file
+			root := newRootCommand(BuildInfo{}, &fakeUpdateManager{})
+			root.SetArgs([]string{"--chain", tc.input, "whoami"})
+			execErr := root.Execute()
+			os.Stdout = originalStdout
+			file.Close()
+			if execErr != nil {
+				t.Fatal(execErr)
+			}
+
+			got, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(got), tc.want) {
+				t.Fatalf("whoami output missing %q; got:\n%s", tc.want, got)
+			}
+		})
+	}
+}
+
+// The TUI degrades to the compiled-in chain list, but `etherscan chains` must
+// not: its distinguishing output is the live status/comment, and reporting a
+// cached "ok" for a chain that is currently offline is worse than an error,
+// because callers act on it.
+func TestChainsDoesNotFallBackOnOutage(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "chainlist unavailable", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	capture := filepath.Join(t.TempDir(), "stdout")
+	file, err := os.Create(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStdout := os.Stdout
+	os.Stdout = file
+	root := newRootCommand(BuildInfo{}, &fakeUpdateManager{})
+	root.SetArgs([]string{"--base-url", server.URL + "/v2/api", "chains"})
+	execErr := root.Execute()
+	os.Stdout = originalStdout
+	file.Close()
+
+	if execErr == nil {
+		t.Fatal("chains succeeded while the chain list was unreachable")
+	}
+	if !strings.Contains(execErr.Error(), "load supported chains") {
+		t.Fatalf("error = %v, want the load failure", execErr)
+	}
+	got, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "ethereum") {
+		t.Fatalf("chains printed a stale list instead of failing:\n%s", got)
+	}
+}

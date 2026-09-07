@@ -3,6 +3,7 @@ package chains
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -20,6 +21,11 @@ type Chain struct {
 	Status      int
 	Comment     string
 }
+
+// StatusUnknown marks a chain whose liveness was not retrieved. It is outside
+// the range the API reports (0-2), so New never produces it and StatusName
+// renders it as "unknown".
+const StatusUnknown = -1
 
 const (
 	FreeTierUnknown   = "unknown"
@@ -199,6 +205,30 @@ func (r *Registry) Resolve(input string) (Chain, error) {
 		}
 	}
 	return Chain{}, fmt.Errorf("unknown chain %q", input)
+}
+
+// Fallback builds a registry from the chains compiled into this release. It is
+// the degraded path for callers that need a chain list but could not reach the
+// chainlist endpoint: the switcher stays usable instead of the caller failing
+// outright. Rows carry no explorer/api URL (the compatibility table has none) and
+// StatusUnknown, because liveness is exactly what could not be fetched. Chains
+// added since this release are absent and must be addressed by ID.
+func Fallback() *Registry {
+	ids := make([]string, 0, len(compatibilityByID))
+	for id := range compatibilityByID {
+		ids = append(ids, id)
+	}
+	// Map iteration is randomised; sort so the switcher list is stable.
+	sort.Slice(ids, func(i, j int) bool {
+		return compatibilityByID[ids[i]].Name < compatibilityByID[ids[j]].Name
+	})
+	result := make([]Chain, 0, len(ids))
+	for _, id := range ids {
+		chain := localCompatibilityChain(id, compatibilityByID[id])
+		chain.Status = StatusUnknown
+		result = append(result, chain)
+	}
+	return &Registry{chains: result}
 }
 
 // ResolveLocal binds a numeric chain ID or an input supported by an older CLI
