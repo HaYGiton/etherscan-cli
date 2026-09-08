@@ -83,7 +83,7 @@ func newRootCommand(info BuildInfo, updates updateManager) *cobra.Command {
 	}
 	root.PersistentFlags().StringVar(&state.apiKey, "api-key", "", "API key for this command (overrides login/ETHERSCAN_API_KEY)")
 	root.PersistentFlags().StringVar(&state.apiKey, "apikey", "", "alias for --api-key")
-	root.PersistentFlags().StringVar(&state.chain, "chain", "", "chain name or chainid")
+	root.PersistentFlags().StringVar(&state.chain, "chain", "", "numeric chain ID (legacy names remain accepted)")
 	root.PersistentFlags().StringVar(&state.baseURL, "base-url", "", "API base URL")
 	root.PersistentFlags().StringVarP(&state.out, "output", "o", "", "output format: json (default), table, csv")
 	root.PersistentFlags().BoolVar(&state.compact, "compact", false, "compact JSON output")
@@ -186,11 +186,11 @@ func endpointCommand(state *globalState, spec EndpointSpec) *cobra.Command {
 			if err := validateParams(spec, params); err != nil {
 				return err
 			}
-			rt, err := runtime(state)
+			rt, err := runtime(cmd.Context(), state)
 			if err != nil {
 				return err
 			}
-			if err := validateEndpointChain(spec, rt.chain); err != nil {
+			if err := validateEndpointChain(spec, rt.chain, rt.registry); err != nil {
 				return err
 			}
 			if spec.Sensitive && !state.yes {
@@ -246,9 +246,13 @@ func collectParams(cmd *cobra.Command, spec EndpointSpec, args []string) (map[st
 }
 
 type resolvedRuntime struct {
-	client *client.Client
-	format output.Format
-	chain  chains.Chain
+	client   *client.Client
+	format   output.Format
+	chain    chains.Chain
+	registry *chains.Registry
+	// registryNotice is set when registry came from chains.Fallback() instead of
+	// the API, so the TUI can say so where the stale list is actually read.
+	registryNotice string
 }
 
 // errNoAPIKey is returned by runtime() when no key is resolved. An API key is
@@ -266,7 +270,7 @@ func resolveKey(state *globalState, cfg config.File) string {
 	return key
 }
 
-func runtime(state *globalState) (resolvedRuntime, error) {
+func runtime(ctx context.Context, state *globalState) (resolvedRuntime, error) {
 	cfg, _, err := config.Load()
 	if err != nil {
 		return resolvedRuntime{}, err
@@ -275,18 +279,18 @@ func runtime(state *globalState) (resolvedRuntime, error) {
 	if key == "" {
 		return resolvedRuntime{}, errNoAPIKey
 	}
-	return buildRuntime(state, cfg, key)
+	return buildRuntime(ctx, state, cfg, key, false)
 }
+
+// degradedChainListNotice is shown in the TUI switcher when the chain list could
+// not be fetched. It stays short on purpose: the switcher is not the place for a
+// transport error, and `etherscan chains` reports the real failure.
+const degradedChainListNotice = "offline list — newer chains may be missing"
 
 // buildRuntime constructs the shared runtime from already-loaded configuration.
 // Most CLI commands call runtime(), which rejects an empty key first. The TUI is
 // the sole caller allowed to pass an empty key so users can browse before setup.
-func buildRuntime(state *globalState, cfg config.File, key string) (resolvedRuntime, error) {
-	chainInput := firstNonEmpty(state.chain, os.Getenv("ETHERSCAN_CHAIN"), cfg.DefaultChain, "ethereum")
-	chain, err := chains.Resolve(chainInput)
-	if err != nil {
-		return resolvedRuntime{}, err
-	}
+func buildRuntime(ctx context.Context, state *globalState, cfg config.File, key string, forceRegistry bool) (resolvedRuntime, error) {
 	baseURL := firstNonEmpty(state.baseURL, os.Getenv("ETHERSCAN_BASE_URL"), cfg.BaseURL, client.DefaultBaseURL)
 	if !strings.HasPrefix(baseURL, "https://") {
 		fmt.Fprintf(os.Stderr, "warning: non-HTTPS base URL: %s\n", baseURL)
@@ -295,18 +299,67 @@ func buildRuntime(state *globalState, cfg config.File, key string) (resolvedRunt
 	if err != nil {
 		return resolvedRuntime{}, err
 	}
+	baseClient := client.New(client.Options{BaseURL: baseURL, APIKey: key, Timeout: state.timeout, RateLimit: state.rate, Verbose: state.verbose, Debug: state.debug, Stderr: os.Stderr})
+	chainInput := firstNonEmpty(state.chain, os.Getenv("ETHERSCAN_CHAIN"), cfg.DefaultChain, "1")
+	var registry *chains.Registry
+	var chain chains.Chain
+	var registryNotice string
+	if forceRegistry {
+		registry, err = fetchChainRegistry(ctx, baseClient)
+		if err != nil {
+			// Degrade rather than refuse to start. The chain list only populates the
+			// TUI's switcher and its metadata: requests are routed by chainid against
+			// the shared base URL, so an unreachable chainlist costs labels, not the
+			// ability to call anything. Resolve the active chain locally so a chain
+			// newer than this release still opens the explorer.
+			registry = chains.Fallback()
+			registryNotice = degradedChainListNotice
+			chain, err = chains.ResolveLocal(chainInput)
+		} else {
+			chain, err = registry.Resolve(chainInput)
+		}
+		if err != nil {
+			return resolvedRuntime{}, err
+		}
+	} else {
+		chain, err = chains.ResolveLocal(chainInput)
+		if err != nil {
+			return resolvedRuntime{}, err
+		}
+	}
 	return resolvedRuntime{
-		client: client.New(client.Options{BaseURL: baseURL, APIKey: key, ChainID: chain.ID, Timeout: state.timeout, RateLimit: state.rate, Verbose: state.verbose, Debug: state.debug, Stderr: os.Stderr}),
-		format: format,
-		chain:  chain,
+		client: baseClient.ForChain(chain.ID), format: format, chain: chain, registry: registry,
+		registryNotice: registryNotice,
 	}, nil
+}
+
+func fetchChainRegistry(ctx context.Context, c *client.Client) (*chains.Registry, error) {
+	entries, err := c.ChainListEntries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load supported chains: %w", err)
+	}
+	apiChains := make([]chains.APIChain, 0, len(entries))
+	for i, entry := range entries {
+		if entry.Status == nil {
+			return nil, fmt.Errorf("load supported chains: unexpected chainlist response: row %d is missing status", i+1)
+		}
+		apiChains = append(apiChains, chains.APIChain{
+			DisplayName: entry.ChainName, ID: entry.ChainID, Explorer: entry.BlockExplorer,
+			APIURL: entry.APIURL, Status: *entry.Status, Comment: entry.Comment,
+		})
+	}
+	registry, err := chains.New(apiChains)
+	if err != nil {
+		return nil, fmt.Errorf("load supported chains: %w", err)
+	}
+	return registry, nil
 }
 
 // rebindRuntimeChain changes only the active chain. The cloned client shares the
 // existing limiter and transport, and the runtime keeps its resolved key, base
 // URL, output format, and other session settings.
 func rebindRuntimeChain(rt *resolvedRuntime, nameOrID string) (chains.Chain, error) {
-	chain, err := chains.Resolve(nameOrID)
+	chain, err := rt.registry.Resolve(nameOrID)
 	if err != nil {
 		return chains.Chain{}, err
 	}
@@ -386,13 +439,13 @@ func loginCommand(state *globalState) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// The chain and base URL are resolved up front because the save closure
-			// below captures them, and it has to exist before the prompt is drawn.
-			chain, err := chains.Resolve(firstNonEmpty(state.chain, cfg.DefaultChain, "ethereum"))
+			// Login validates credentials against Ethereum mainnet and does not need
+			// chain discovery. Preserve an explicitly selected/default chain verbatim.
+			baseURL := firstNonEmpty(state.baseURL, os.Getenv("ETHERSCAN_BASE_URL"), cfg.BaseURL, client.DefaultBaseURL)
+			configuredChain, err := chains.ResolveLocal(firstNonEmpty(state.chain, cfg.DefaultChain, "1"))
 			if err != nil {
 				return err
 			}
-			baseURL := firstNonEmpty(state.baseURL, cfg.BaseURL, client.DefaultBaseURL)
 
 			var savedPath, savedLabel string
 			save := func(ctx context.Context, key string) (string, error) {
@@ -403,7 +456,7 @@ func loginCommand(state *globalState) *cobra.Command {
 				if err := checkKeyShape(key); err != nil {
 					return "", err
 				}
-				if err := validateKeyLive(ctx, state, key, chain.ID, baseURL); err != nil {
+				if err := validateKeyLive(ctx, state, key, "1", baseURL); err != nil {
 					return "", err
 				}
 				// Re-read so a concurrent config edit is not clobbered, then check
@@ -417,7 +470,7 @@ func loginCommand(state *globalState) *cobra.Command {
 					return "", err
 				}
 				latest.BaseURL = baseURL
-				latest.DefaultChain = chain.Name
+				latest.DefaultChain = configuredChain.ID
 				config.StoreAPIKey(key, &latest)
 				path, err := config.Save(latest)
 				if err != nil {
@@ -601,24 +654,40 @@ func chainsCommand(state *globalState) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		rows := make([]map[string]string, 0, len(chains.All()))
-		for _, c := range chains.All() {
-			freeTier := "available"
-			if !c.FreeTier {
-				freeTier = "paid only"
-			}
+		cfg, _, _ := config.Load()
+		baseURL := firstNonEmpty(state.baseURL, os.Getenv("ETHERSCAN_BASE_URL"), cfg.BaseURL, client.DefaultBaseURL)
+		registry, err := fetchChainRegistry(cmd.Context(), client.New(client.Options{BaseURL: baseURL, Timeout: state.timeout, RateLimit: state.rate, Verbose: state.verbose, Debug: state.debug, Stderr: os.Stderr}))
+		if err != nil {
+			return err
+		}
+		all := registry.All()
+		rows := make([]map[string]string, 0, len(all))
+		for _, c := range all {
 			rows = append(rows, map[string]string{
 				"id":        c.ID,
 				"name":      c.DisplayName,
 				"slug":      c.Name,
-				"free_tier": freeTier,
+				"free_tier": c.FreeTier,
 				"testnet":   fmt.Sprint(c.Testnet),
 				"symbol":    c.Symbol,
 				"explorer":  c.Explorer,
+				"api_url":   c.APIURL,
+				"status":    chains.StatusName(c.Status),
+				"comment":   c.Comment,
 			})
 		}
-		return output.WriteRows(os.Stdout, rows, format, []string{"id", "name", "slug", "free_tier", "testnet", "symbol", "explorer"})
+		return output.WriteRows(os.Stdout, rows, format, []string{"id", "name", "slug", "free_tier", "testnet", "symbol", "explorer", "api_url", "status", "comment"})
 	}}
+}
+
+// chainLabel renders a resolved chain for display. Chains in the compatibility
+// table carry a slug worth showing next to the ID; a chain addressed only by ID
+// resolves with Name == ID, so print the ID on its own.
+func chainLabel(chain chains.Chain) string {
+	if chain.Name == "" || chain.Name == chain.ID {
+		return chain.ID
+	}
+	return fmt.Sprintf("%s (%s)", chain.Name, chain.ID)
 }
 
 func whoamiCommand(state *globalState) *cobra.Command {
@@ -627,7 +696,11 @@ func whoamiCommand(state *globalState) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		chain, err := chains.Resolve(firstNonEmpty(state.chain, os.Getenv("ETHERSCAN_CHAIN"), cfg.DefaultChain, "ethereum"))
+		// Resolve offline so whoami stays network-free (see
+		// TestWhoamiDoesNotFetchChainList) while still agreeing with the resolution
+		// every other command performs: a chain the CLI would reject must not be
+		// reported here as if it were active.
+		chain, err := chains.ResolveLocal(firstNonEmpty(state.chain, os.Getenv("ETHERSCAN_CHAIN"), cfg.DefaultChain, "1"))
 		if err != nil {
 			return err
 		}
@@ -639,7 +712,7 @@ func whoamiCommand(state *globalState) *cobra.Command {
 		if key != "" {
 			keyDisplay = maskKey(key)
 		}
-		fmt.Fprintf(os.Stdout, "chain:   %s (%s)\napi key: %s\n", chain.Name, chain.ID, keyDisplay)
+		fmt.Fprintf(os.Stdout, "chain:   %s\napi key: %s\n", chainLabel(chain), keyDisplay)
 		fmt.Fprintln(os.Stderr, "(run 'etherscan apilimit' for credit usage)")
 		return nil
 	}}
@@ -785,7 +858,7 @@ func launchTUI(ctx context.Context, state *globalState, info BuildInfo) error {
 		return err
 	}
 	key := resolveKey(state, cfg)
-	rt, err := buildRuntime(state, cfg, key)
+	rt, err := buildRuntime(ctx, state, cfg, key, true)
 	if err != nil {
 		return err
 	}
@@ -820,7 +893,7 @@ func launchTUI(ctx context.Context, state *globalState, info BuildInfo) error {
 			return "", err
 		}
 		latest.BaseURL = baseURL
-		latest.DefaultChain = rt.chain.Name
+		latest.DefaultChain = rt.chain.ID
 		config.StoreAPIKey(key, &latest)
 		if _, err := config.Save(latest); err != nil {
 			return "", err
@@ -829,27 +902,29 @@ func launchTUI(ctx context.Context, state *globalState, info BuildInfo) error {
 		return maskKey(key), nil
 	}
 	return tui.Run(ctx, tui.Config{
-		Endpoints:   eps,
-		Exec:        tuiExec(&rt, index),
-		Validate:    tuiValidate(&rt, index),
-		ChainName:   rt.chain.DisplayName,
-		ChainID:     rt.chain.ID,
-		KeyLabel:    keyLabel,
-		HasAPIKey:   key != "",
-		SaveAPIKey:  saveKey,
-		Chains:      tuiChains(),
-		SwitchChain: switchChain,
+		Endpoints:    eps,
+		Exec:         tuiExec(&rt, index),
+		Validate:     tuiValidate(&rt, index),
+		ChainName:    rt.chain.DisplayName,
+		ChainID:      rt.chain.ID,
+		KeyLabel:     keyLabel,
+		HasAPIKey:    key != "",
+		SaveAPIKey:   saveKey,
+		Chains:       tuiChains(rt.registry),
+		ChainsNotice: rt.registryNotice,
+		SwitchChain:  switchChain,
 	})
 }
 
 // tuiChains maps the chain registry into the TUI's display list for the switcher.
-func tuiChains() []tui.ChainInfo {
-	all := chains.All()
+func tuiChains(registry *chains.Registry) []tui.ChainInfo {
+	all := registry.All()
 	out := make([]tui.ChainInfo, 0, len(all))
 	for _, c := range all {
 		out = append(out, tui.ChainInfo{
 			Name: c.Name, DisplayName: c.DisplayName, ID: c.ID,
-			Aliases: append([]string(nil), c.Aliases...), Testnet: c.Testnet, PaidOnly: !c.FreeTier,
+			Aliases:  append([]string(nil), c.Aliases...),
+			PaidOnly: c.FreeTier == chains.FreeTierPaidOnly, Status: chains.StatusName(c.Status),
 		})
 	}
 	return out
@@ -869,14 +944,14 @@ func tuiValidate(rt *resolvedRuntime, index map[string]EndpointSpec) func(module
 		if !ok {
 			return fmt.Errorf("unknown endpoint %s/%s", module, action)
 		}
-		if err := validateEndpointChain(spec, rt.chain); err != nil {
+		if err := validateEndpointChain(spec, rt.chain, rt.registry); err != nil {
 			return err
 		}
 		return validateParams(spec, params)
 	}
 }
 
-func validateEndpointChain(spec EndpointSpec, chain chains.Chain) error {
+func validateEndpointChain(spec EndpointSpec, chain chains.Chain, registry *chains.Registry) error {
 	if spec.MainnetOnly && !chains.IsMainnetID(chain.ID) {
 		return fmt.Errorf("%s/%s is only supported on Ethereum mainnet", spec.Module, spec.Action)
 	}
@@ -890,7 +965,14 @@ func validateEndpointChain(spec EndpointSpec, chain chains.Chain) error {
 	}
 	names := make([]string, len(spec.AllowedChainIDs))
 	for i, id := range spec.AllowedChainIDs {
-		if allowed, err := chains.Resolve(id); err == nil {
+		var allowed chains.Chain
+		var err error
+		if registry != nil {
+			allowed, err = registry.Resolve(id)
+		} else {
+			allowed, err = chains.ResolveLocal(id)
+		}
+		if err == nil {
 			names[i] = allowed.DisplayName
 		} else {
 			names[i] = id
@@ -1486,7 +1568,7 @@ func confirm(ctx context.Context, prompt string, input io.Reader, output io.Writ
 }
 
 // chainsFormat resolves the output format for `chains` without going through
-// runtime(): the chain list comes from the built-in registry, so the command must
+// runtime(): the public chain-list endpoint needs no API key, so the command must
 // work before `etherscan login`. A config load failure degrades to the flag value
 // or the built-in default rather than failing the listing.
 func chainsFormat(state *globalState) (output.Format, error) {

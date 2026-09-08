@@ -35,6 +35,38 @@ func newLoginTest(t *testing.T, validKey bool) (configPath string, baseURL strin
 	return filepath.Join(dir, "etherscan", "config.toml"), srv.URL
 }
 
+func TestLoginUsesEthereumWithoutChainDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("ETHERSCAN_PLAIN_PROMPT", "1")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if strings.HasSuffix(r.URL.Path, "/chainlist") {
+			t.Error("login requested chain discovery")
+		}
+		if got := r.URL.Query().Get("chainid"); got != "1" {
+			t.Errorf("login validation chainid = %q, want 1", got)
+		}
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":{"creditsUsed":1}}`))
+	}))
+	defer server.Close()
+
+	if _, _, err := runLogin(t, "TestKey123\n", "--base-url", server.URL, "--chain", "base"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("login requests = %d, want one validation request", requests)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "etherscan", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `default_chain = "8453"`) {
+		t.Fatalf("configured chain was not preserved:\n%s", data)
+	}
+}
+
 func runLogin(t *testing.T, stdin string, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	root := newRootCommand(BuildInfo{Version: "1.1.0"}, &fakeUpdateManager{})

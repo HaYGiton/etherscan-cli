@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+	"github.com/etherscan/etherscan-cli/internal/chains"
 )
 
 type File struct {
@@ -36,7 +37,7 @@ func Load() (File, string, error) {
 	// struct, so seeding it would persist an implicit choice into every user's config.toml
 	// (as it once did with "table") and pin them to it across future default changes.
 	// Callers resolve an empty value against output.DefaultFormat instead.
-	cfg := File{DefaultChain: "ethereum"}
+	cfg := File{DefaultChain: "1"}
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return cfg, path, nil
 	}
@@ -44,7 +45,7 @@ func Load() (File, string, error) {
 		return cfg, path, err
 	}
 	if cfg.DefaultChain == "" {
-		cfg.DefaultChain = "ethereum"
+		cfg.DefaultChain = "1"
 	}
 	return cfg, path, nil
 }
@@ -116,7 +117,11 @@ func Set(cfg *File, assignment string) error {
 	case "api_key":
 		cfg.APIKey = value
 	case "default_chain":
-		cfg.DefaultChain = value
+		chainID, ok := chains.NormalizeID(value)
+		if !ok {
+			return errors.New("default_chain must be a positive decimal chain ID; run 'etherscan chains' to list supported IDs")
+		}
+		cfg.DefaultChain = chainID
 	case "default_output":
 		cfg.DefaultOutput = value
 	case "base_url":

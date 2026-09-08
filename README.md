@@ -203,11 +203,11 @@ Use `--file` for Solidity, Abstract zkSync-stack, or Vyper source payloads. Styl
 etherscan contractverification verify 0xYourContract --file input.json --codeformat solidity-standard-json-input --contractname contracts/Verified.sol:Verified --compilerversion v0.8.24+commit.e11b9ed9
 
 # Abstract uses the zkSync compiler stack (Abstract Mainnet and Sepolia only)
-etherscan --chain abstract contractverification verify-zksync 0xYourContract --file input.json --codeformat solidity-standard-json-input --contractname contracts/Verified.sol:Verified --compilerversion v0.8.24+commit.e11b9ed9 --zksolc-version v1.5.7
+etherscan --chain 2741 contractverification verify-zksync 0xYourContract --file input.json --codeformat solidity-standard-json-input --contractname contracts/Verified.sol:Verified --compilerversion v0.8.24+commit.e11b9ed9 --zksolc-version v1.5.7
 
 # Vyper JSON verification, and Stylus repository verification (Arbitrum One and Sepolia only)
 etherscan contractverification verify-vyper 0xYourContract --file input.json --contractname contracts/Verified.vy:Verified --compilerversion vyper:0.4.0 --optimization-used 0
-etherscan --chain arbitrum contractverification verify-stylus 0xYourContract --source-code https://github.com/example/project --contractname project --compilerversion stylus:0.5.3 --license-type 3
+etherscan --chain 42161 contractverification verify-stylus 0xYourContract --source-code https://github.com/example/project --contractname project --compilerversion stylus:0.5.3 --license-type 3
 ```
 
 Each submission returns a GUID. Poll it with `check-status` for source verification, or `check-proxy` for a proxy submission:
@@ -222,13 +222,15 @@ Constructor arguments may be supplied as bare ABI-encoded hex or with a `0x` pre
 ### Switch chains
 
 ```sh
-# Chain names and numeric IDs both work
-etherscan --chain base gastracker oracle
+# Numeric chain IDs are canonical
+etherscan --chain 8453 gastracker oracle
 etherscan --chain 8453 account balance 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
 
-# See every chain built into this release
+# See every chain currently returned by the Etherscan chain-list API
 etherscan chains
 ```
+
+`etherscan chains` and `etherscan tui` refresh the live chain list when they start. Ordinary API commands bind numeric chain IDs directly without an additional chain-list request. Names such as `base` and `matic` remain locally supported for compatibility, but newly added chains must be addressed by ID.
 
 ### Build scripts and agent workflows
 
@@ -278,7 +280,7 @@ etherscan contractverification verify --help
 | `etherscan update` | Update a Homebrew or installer-script installation |
 | `etherscan whoami` | Show the active chain and masked API key |
 | `etherscan config` | Get, list, or set CLI configuration |
-| `etherscan chains` | List chains built into this CLI release |
+| `etherscan chains` | List chains currently supported by the Etherscan API |
 | `etherscan completion` | Generate shell completion |
 | `etherscan version` | Print the CLI version |
 | `etherscan --help` | Show command usage and available options |
@@ -443,7 +445,7 @@ Manage non-secret defaults with:
 
 ```sh
 etherscan config list
-etherscan config set default_chain=base
+etherscan config set default_chain=8453
 etherscan config set default_output=table
 ```
 

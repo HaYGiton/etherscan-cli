@@ -2,7 +2,10 @@ package chains
 
 import (
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
+	"unicode"
 )
 
 type Chain struct {
@@ -12,85 +15,187 @@ type Chain struct {
 	Aliases     []string
 	Explorer    string
 	Symbol      string
+	FreeTier    string
 	Testnet     bool
-	FreeTier    bool
+	APIURL      string
+	Status      int
+	Comment     string
 }
 
-// (https://api.etherscan.io/v2/chainlist). Keep in sync when Etherscan adds chains.
-var registry = []Chain{
-	{"1", "ethereum", "Ethereum Mainnet", []string{"eth", "mainnet", "ethereum-mainnet"}, "https://etherscan.io", "ETH", false, true},
-	{"11155111", "sepolia", "Sepolia Testnet", []string{"ethereum-sepolia"}, "https://sepolia.etherscan.io", "ETH", true, true},
-	{"560048", "hoodi", "Hoodi Testnet", []string{"hoodi-testnet"}, "https://hoodi.etherscan.io", "ETH", true, true},
-	{"56", "bsc", "BNB Smart Chain Mainnet", []string{"bnb", "binance", "bnb-smart-chain"}, "https://bscscan.com", "BNB", false, false},
-	{"97", "bsc-testnet", "BNB Smart Chain Testnet", []string{"bnb-testnet"}, "https://testnet.bscscan.com", "BNB", true, false},
-	{"137", "polygon", "Polygon Mainnet", []string{"matic", "pol"}, "https://polygonscan.com", "POL", false, true},
-	{"80002", "polygon-amoy", "Polygon Amoy Testnet", []string{"amoy"}, "https://amoy.polygonscan.com", "POL", true, true},
-	{"8453", "base", "Base Mainnet", []string{"base-mainnet"}, "https://basescan.org", "ETH", false, false},
-	{"84532", "base-sepolia", "Base Sepolia Testnet", []string{"basesepolia"}, "https://sepolia.basescan.org", "ETH", true, false},
-	{"42161", "arbitrum", "Arbitrum One Mainnet", []string{"arbitrum-one", "arb"}, "https://arbiscan.io", "ETH", false, true},
-	{"421614", "arbitrum-sepolia", "Arbitrum Sepolia Testnet", []string{"arb-sepolia"}, "https://sepolia.arbiscan.io", "ETH", true, true},
-	{"59144", "linea", "Linea Mainnet", []string{"linea-mainnet"}, "https://lineascan.build", "ETH", false, true},
-	{"59141", "linea-sepolia", "Linea Sepolia Testnet", []string{"linea-testnet"}, "https://sepolia.lineascan.build", "ETH", true, true},
-	{"81457", "blast", "Blast Mainnet", []string{"blast-mainnet"}, "https://blastscan.io", "ETH", false, true},
-	{"168587773", "blast-sepolia", "Blast Sepolia Testnet", []string{"blast-testnet"}, "https://sepolia.blastscan.io", "ETH", true, true},
-	{"10", "optimism", "OP Mainnet", []string{"op", "op-mainnet"}, "https://optimistic.etherscan.io", "ETH", false, false},
-	{"11155420", "optimism-sepolia", "OP Sepolia Testnet", []string{"op-sepolia"}, "https://sepolia-optimism.etherscan.io", "ETH", true, false},
-	{"43114", "avalanche", "Avalanche C-Chain", []string{"avax", "avalanche-c-chain"}, "https://snowscan.xyz", "AVAX", false, false},
-	{"43113", "avalanche-fuji", "Avalanche Fuji Testnet", []string{"fuji"}, "https://testnet.snowscan.xyz", "AVAX", true, false},
-	{"199", "bttc", "BitTorrent Chain Mainnet", []string{"bittorrent", "bittorrent-chain"}, "https://bttcscan.com", "BTT", false, true},
-	{"1029", "bttc-testnet", "BitTorrent Chain Testnet", []string{"bittorrent-testnet"}, "https://testnet.bttcscan.com", "BTT", true, true},
-	{"42220", "celo", "Celo Mainnet", []string{"celo-mainnet"}, "https://celoscan.io", "CELO", false, true},
-	{"11142220", "celo-sepolia", "Celo Sepolia Testnet", []string{"celo-testnet"}, "https://sepolia.celoscan.io", "CELO", true, true},
-	{"252", "fraxtal", "Fraxtal Mainnet", []string{"frax"}, "https://fraxscan.com", "frxETH", false, true},
-	{"2523", "fraxtal-hoodi", "Fraxtal Hoodi Testnet", []string{"fraxtal-testnet"}, "https://hoodi.fraxscan.com", "frxETH", true, true},
-	{"100", "gnosis", "Gnosis", []string{"xdai"}, "https://gnosisscan.io", "xDAI", false, true},
-	{"5000", "mantle", "Mantle Mainnet", []string{"mantle-mainnet"}, "https://mantlescan.xyz", "MNT", false, true},
-	{"5003", "mantle-sepolia", "Mantle Sepolia Testnet", []string{"mantle-testnet"}, "https://sepolia.mantlescan.xyz", "MNT", true, true},
-	{"4352", "memecore", "Memecore Mainnet", nil, "https://memecorescan.io", "", false, true},
-	{"43522", "memecore-testnet", "Memecore Insectarium Testnet", []string{"memecore-insectarium"}, "https://testnet.memecorescan.io", "", true, true},
-	// Removed as deprecated: Moonbeam (1284), Moonriver (1285) and Moonbase Alpha
-	// (1287). Dropped here ahead of the chainlist endpoint, which is being updated
-	// to remove them too.
-	{"204", "opbnb", "opBNB Mainnet", nil, "https://opbnb.bscscan.com", "BNB", false, true},
-	{"5611", "opbnb-testnet", "opBNB Testnet", nil, "https://opbnb-testnet.bscscan.com", "BNB", true, true},
-	{"167000", "taiko", "Taiko Mainnet", nil, "https://taikoscan.io", "ETH", false, true},
-	{"167013", "taiko-hoodi", "Taiko Hoodi", []string{"taiko-testnet"}, "https://hoodi.taikoscan.io", "ETH", true, true},
-	{"50", "xdc", "XDC Mainnet", nil, "https://xdcscan.com", "XDC", false, true},
-	{"51", "xdc-apothem", "XDC Apothem Testnet", []string{"xdc-testnet", "apothem"}, "https://testnet.xdcscan.com", "XDC", true, true},
-	{"33139", "apechain", "ApeChain Mainnet", []string{"ape"}, "https://apescan.io", "APE", false, true},
-	{"33111", "apechain-curtis", "ApeChain Curtis Testnet", []string{"apechain-testnet", "curtis"}, "https://curtis.apescan.io", "APE", true, true},
-	{"480", "world", "World Mainnet", []string{"worldchain"}, "https://worldscan.org", "ETH", false, true},
-	{"4801", "world-sepolia", "World Sepolia Testnet", []string{"world-testnet"}, "https://sepolia.worldscan.org", "ETH", true, true},
-	{"146", "sonic", "Sonic Mainnet", nil, "https://sonicscan.org", "S", false, true},
-	{"14601", "sonic-testnet", "Sonic Testnet", nil, "https://testnet.sonicscan.org", "S", true, true},
-	{"130", "unichain", "Unichain Mainnet", []string{"uni"}, "https://uniscan.xyz", "ETH", false, true},
-	{"1301", "unichain-sepolia", "Unichain Sepolia Testnet", []string{"unichain-testnet"}, "https://sepolia.uniscan.xyz", "ETH", true, true},
-	{"2741", "abstract", "Abstract Mainnet", nil, "https://abscan.org", "ETH", false, true},
-	{"11124", "abstract-sepolia", "Abstract Sepolia Testnet", []string{"abstract-testnet"}, "https://sepolia.abscan.org", "ETH", true, true},
-	{"80094", "berachain", "Berachain Mainnet", []string{"bera"}, "https://berascan.com", "BERA", false, true},
-	{"80069", "berachain-bepolia", "Berachain Bepolia Testnet", []string{"berachain-testnet", "bepolia"}, "https://testnet.berascan.com", "BERA", true, true},
-	{"143", "monad", "Monad Mainnet", nil, "https://monadscan.com", "MON", false, true},
-	{"10143", "monad-testnet", "Monad Testnet", nil, "https://testnet.monadscan.com", "MON", true, true},
-	{"999", "hyperevm", "HyperEVM Mainnet", []string{"hyper"}, "https://hyperevmscan.io", "HYPE", false, true},
-	{"747474", "katana", "Katana Mainnet", nil, "https://katanascan.com", "", false, true},
-	{"737373", "katana-bokuto", "Katana Bokuto", []string{"katana-testnet", "bokuto"}, "https://bokuto.katanascan.com", "", true, true},
-	{"1329", "sei", "Sei Mainnet", nil, "https://seiscan.io", "SEI", false, true},
-	{"1328", "sei-testnet", "Sei Testnet", nil, "https://testnet.seiscan.io", "SEI", true, true},
-	{"988", "stable", "Stable Mainnet", nil, "https://stablescan.xyz", "", false, true},
-	{"2201", "stable-testnet", "Stable Testnet", nil, "https://testnet.stablescan.xyz", "", true, true},
-	{"9745", "plasma", "Plasma Mainnet", nil, "https://plasmascan.to", "", false, true},
-	{"9746", "plasma-testnet", "Plasma Testnet", nil, "https://testnet.plasmascan.to", "", true, true},
-	{"4326", "megaeth", "MegaETH Mainnet", []string{"mega"}, "https://mega.etherscan.io", "ETH", false, true},
-	{"6343", "megaeth-testnet", "MegaETH Testnet", []string{"mega-testnet"}, "https://testnet-mega.etherscan.io", "ETH", true, true},
+// StatusUnknown marks a chain whose liveness was not retrieved. It is outside
+// the range the API reports (0-2), so New never produces it and StatusName
+// renders it as "unknown".
+const StatusUnknown = -1
+
+const (
+	FreeTierUnknown   = "unknown"
+	FreeTierAvailable = "available"
+	FreeTierPaidOnly  = "paid only"
+)
+
+// APIChain is one row returned by the Etherscan V2 chain-list endpoint.
+type APIChain struct {
+	DisplayName string
+	ID          string
+	Explorer    string
+	APIURL      string
+	Status      int
+	Comment     string
 }
 
-func Resolve(input string) (Chain, error) {
+// Registry is an immutable snapshot of the chains returned by the API.
+type Registry struct {
+	chains []Chain
+}
+
+type compatibility struct {
+	Name         string
+	DisplayName  string
+	Aliases      []string
+	ForceTestnet bool
+}
+
+// compatibilityByID preserves inputs accepted by older releases. It does not
+// describe supported chains: IDs absent from the API never enter the registry,
+// and newly returned IDs work without an entry here.
+var compatibilityByID = map[string]compatibility{
+	"1":         {Name: "ethereum", Aliases: []string{"eth", "mainnet", "ethereum-mainnet"}},
+	"11155111":  {Name: "sepolia", Aliases: []string{"ethereum-sepolia"}},
+	"560048":    {Name: "hoodi", Aliases: []string{"hoodi-testnet"}},
+	"56":        {Name: "bsc", Aliases: []string{"bnb", "binance", "bnb-smart-chain"}},
+	"97":        {Name: "bsc-testnet", Aliases: []string{"bnb-testnet"}},
+	"137":       {Name: "polygon", Aliases: []string{"matic", "pol"}},
+	"80002":     {Name: "polygon-amoy", Aliases: []string{"amoy"}},
+	"8453":      {Name: "base", Aliases: []string{"base-mainnet"}},
+	"84532":     {Name: "base-sepolia", Aliases: []string{"basesepolia"}},
+	"42161":     {Name: "arbitrum", DisplayName: "Arbitrum One Mainnet", Aliases: []string{"arbitrum-one", "arb"}},
+	"421614":    {Name: "arbitrum-sepolia", DisplayName: "Arbitrum Sepolia Testnet", Aliases: []string{"arb-sepolia"}},
+	"59144":     {Name: "linea", Aliases: []string{"linea-mainnet"}},
+	"59141":     {Name: "linea-sepolia", Aliases: []string{"linea-testnet"}},
+	"81457":     {Name: "blast", Aliases: []string{"blast-mainnet"}},
+	"168587773": {Name: "blast-sepolia", Aliases: []string{"blast-testnet"}},
+	"10":        {Name: "optimism", Aliases: []string{"op", "op-mainnet"}},
+	"11155420":  {Name: "optimism-sepolia", Aliases: []string{"op-sepolia"}},
+	"43114":     {Name: "avalanche", Aliases: []string{"avax", "avalanche-c-chain"}},
+	"43113":     {Name: "avalanche-fuji", Aliases: []string{"fuji"}},
+	"199":       {Name: "bttc", Aliases: []string{"bittorrent", "bittorrent-chain"}},
+	"1029":      {Name: "bttc-testnet", Aliases: []string{"bittorrent-testnet"}},
+	"42220":     {Name: "celo", Aliases: []string{"celo-mainnet"}},
+	"11142220":  {Name: "celo-sepolia", Aliases: []string{"celo-testnet"}},
+	"252":       {Name: "fraxtal", Aliases: []string{"frax"}},
+	"2523":      {Name: "fraxtal-hoodi", Aliases: []string{"fraxtal-testnet"}},
+	"100":       {Name: "gnosis", Aliases: []string{"xdai"}},
+	"5000":      {Name: "mantle", Aliases: []string{"mantle-mainnet"}},
+	"5003":      {Name: "mantle-sepolia", Aliases: []string{"mantle-testnet"}},
+	"4352":      {Name: "memecore"},
+	"43522":     {Name: "memecore-testnet", Aliases: []string{"memecore-insectarium"}},
+	"204":       {Name: "opbnb"},
+	"5611":      {Name: "opbnb-testnet"},
+	"167000":    {Name: "taiko"},
+	"167013":    {Name: "taiko-hoodi", Aliases: []string{"taiko-testnet"}, ForceTestnet: true},
+	"50":        {Name: "xdc"},
+	"51":        {Name: "xdc-apothem", Aliases: []string{"xdc-testnet", "apothem"}},
+	"33139":     {Name: "apechain", Aliases: []string{"ape"}},
+	"33111":     {Name: "apechain-curtis", Aliases: []string{"apechain-testnet", "curtis"}},
+	"480":       {Name: "world", Aliases: []string{"worldchain"}},
+	"4801":      {Name: "world-sepolia", Aliases: []string{"world-testnet"}},
+	"146":       {Name: "sonic"},
+	"14601":     {Name: "sonic-testnet"},
+	"130":       {Name: "unichain", Aliases: []string{"uni"}},
+	"1301":      {Name: "unichain-sepolia", Aliases: []string{"unichain-testnet"}},
+	"2741":      {Name: "abstract", DisplayName: "Abstract Mainnet"},
+	"11124":     {Name: "abstract-sepolia", DisplayName: "Abstract Sepolia Testnet", Aliases: []string{"abstract-testnet"}},
+	"80094":     {Name: "berachain", Aliases: []string{"bera"}},
+	"80069":     {Name: "berachain-bepolia", Aliases: []string{"berachain-testnet", "bepolia"}},
+	"143":       {Name: "monad"},
+	"10143":     {Name: "monad-testnet"},
+	"999":       {Name: "hyperevm", Aliases: []string{"hyper"}},
+	"747474":    {Name: "katana"},
+	"737373":    {Name: "katana-bokuto", Aliases: []string{"katana-testnet", "bokuto"}, ForceTestnet: true},
+	"1329":      {Name: "sei"},
+	"1328":      {Name: "sei-testnet"},
+	"988":       {Name: "stable"},
+	"2201":      {Name: "stable-testnet"},
+	"9745":      {Name: "plasma"},
+	"9746":      {Name: "plasma-testnet"},
+	"4326":      {Name: "megaeth", Aliases: []string{"mega"}},
+	"6343":      {Name: "megaeth-testnet", Aliases: []string{"mega-testnet"}},
+}
+
+func New(apiChains []APIChain) (*Registry, error) {
+	if len(apiChains) == 0 {
+		return nil, fmt.Errorf("unexpected chainlist response: empty result")
+	}
+
+	seenIDs := make(map[string]struct{}, len(apiChains))
+	seenNames := make(map[string]string, len(apiChains))
+	result := make([]Chain, 0, len(apiChains))
+	for i, apiChain := range apiChains {
+		apiChain.ID = strings.TrimSpace(apiChain.ID)
+		apiChain.DisplayName = strings.TrimSpace(apiChain.DisplayName)
+		apiChain.Explorer = strings.TrimRight(strings.TrimSpace(apiChain.Explorer), "/")
+		apiChain.APIURL = strings.TrimSpace(apiChain.APIURL)
+		if apiChain.ID == "" || apiChain.DisplayName == "" || apiChain.Explorer == "" || apiChain.APIURL == "" {
+			return nil, fmt.Errorf("unexpected chainlist response: row %d is missing a required field", i+1)
+		}
+		if _, ok := seenIDs[apiChain.ID]; ok {
+			return nil, fmt.Errorf("unexpected chainlist response: duplicate chain ID %s", apiChain.ID)
+		}
+		seenIDs[apiChain.ID] = struct{}{}
+		if apiChain.Status < 0 || apiChain.Status > 2 {
+			return nil, fmt.Errorf("unexpected chainlist response: chain %s has invalid status %d", apiChain.ID, apiChain.Status)
+		}
+		for field, rawURL := range map[string]string{"blockexplorer": apiChain.Explorer, "apiurl": apiChain.APIURL} {
+			parsed, err := url.Parse(rawURL)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				return nil, fmt.Errorf("unexpected chainlist response: chain %s has invalid %s", apiChain.ID, field)
+			}
+		}
+
+		chain := Chain{
+			ID: apiChain.ID, Name: slug(apiChain.DisplayName), DisplayName: apiChain.DisplayName,
+			Explorer: apiChain.Explorer, APIURL: apiChain.APIURL, Status: apiChain.Status,
+			Comment: apiChain.Comment, FreeTier: FreeTierUnknown,
+			Testnet: strings.Contains(strings.ToLower(apiChain.DisplayName), "testnet"),
+		}
+		if legacy, ok := compatibilityByID[apiChain.ID]; ok {
+			if legacy.Name != "" {
+				chain.Name = legacy.Name
+			}
+			chain.Aliases = append([]string(nil), legacy.Aliases...)
+			chain.Testnet = chain.Testnet || legacy.ForceTestnet
+			chain.Symbol = legacySymbol(apiChain.ID)
+			chain.FreeTier = FreeTierAvailable
+			if legacyPaidOnly(apiChain.ID) {
+				chain.FreeTier = FreeTierPaidOnly
+			}
+		}
+		identifiers := append([]string{chain.ID, chain.Name, strings.ToLower(chain.DisplayName)}, chain.Aliases...)
+		for _, identifier := range identifiers {
+			identifier = strings.ToLower(strings.TrimSpace(identifier))
+			if owner, ok := seenNames[identifier]; ok && owner != chain.ID {
+				return nil, fmt.Errorf("unexpected chainlist response: identifier %q is shared by chains %s and %s", identifier, owner, chain.ID)
+			}
+			seenNames[identifier] = chain.ID
+		}
+		result = append(result, chain)
+	}
+	return &Registry{chains: result}, nil
+}
+
+func (r *Registry) Resolve(input string) (Chain, error) {
+	if r == nil {
+		return Chain{}, fmt.Errorf("chain registry is not loaded")
+	}
 	if strings.TrimSpace(input) == "" {
-		input = "ethereum"
+		input = "1"
 	}
 	needle := strings.ToLower(strings.TrimSpace(input))
-	for _, chain := range registry {
-		if chain.ID == needle || chain.Name == needle {
+	if id, ok := NormalizeID(needle); ok {
+		needle = id
+	}
+	for _, chain := range r.chains {
+		if chain.ID == needle || chain.Name == needle || strings.ToLower(chain.DisplayName) == needle {
 			return chain, nil
 		}
 		for _, alias := range chain.Aliases {
@@ -102,10 +207,180 @@ func Resolve(input string) (Chain, error) {
 	return Chain{}, fmt.Errorf("unknown chain %q", input)
 }
 
-func All() []Chain {
-	return append([]Chain(nil), registry...)
+// Fallback builds a registry from the chains compiled into this release. It is
+// the degraded path for callers that need a chain list but could not reach the
+// chainlist endpoint: the switcher stays usable instead of the caller failing
+// outright. Rows carry no explorer/api URL (the compatibility table has none) and
+// StatusUnknown, because liveness is exactly what could not be fetched. Chains
+// added since this release are absent and must be addressed by ID.
+func Fallback() *Registry {
+	ids := make([]string, 0, len(compatibilityByID))
+	for id := range compatibilityByID {
+		ids = append(ids, id)
+	}
+	// Map iteration is randomised; sort so the switcher list is stable.
+	sort.Slice(ids, func(i, j int) bool {
+		return compatibilityByID[ids[i]].Name < compatibilityByID[ids[j]].Name
+	})
+	result := make([]Chain, 0, len(ids))
+	for _, id := range ids {
+		chain := localCompatibilityChain(id, compatibilityByID[id])
+		chain.Status = StatusUnknown
+		result = append(result, chain)
+	}
+	return &Registry{chains: result}
+}
+
+// ResolveLocal binds a numeric chain ID or an input supported by an older CLI
+// release without consulting the live chain list. New chains must be addressed
+// by ID; the target API call remains authoritative for current support.
+func ResolveLocal(input string) (Chain, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		input = "1"
+	}
+	if id, ok := NormalizeID(input); ok {
+		if legacy, exists := compatibilityByID[id]; exists {
+			return localCompatibilityChain(id, legacy), nil
+		}
+		return Chain{ID: id, Name: id, DisplayName: id}, nil
+	}
+	needle := strings.ToLower(input)
+	for id, legacy := range compatibilityByID {
+		if legacy.Name == needle {
+			return localCompatibilityChain(id, legacy), nil
+		}
+		for _, alias := range legacy.Aliases {
+			if alias == needle {
+				return localCompatibilityChain(id, legacy), nil
+			}
+		}
+	}
+	return Chain{}, fmt.Errorf("chain must be a numeric chain ID; run 'etherscan chains' to list supported IDs (legacy name %q is not recognized)", input)
+}
+
+func localCompatibilityChain(id string, legacy compatibility) Chain {
+	displayName := legacy.DisplayName
+	if displayName == "" {
+		displayName = legacy.Name
+	}
+	chain := Chain{
+		ID: id, Name: legacy.Name, DisplayName: displayName,
+		Aliases: append([]string(nil), legacy.Aliases...), Symbol: legacySymbol(id),
+		FreeTier: FreeTierAvailable, Testnet: legacy.ForceTestnet,
+	}
+	if legacyPaidOnly(id) {
+		chain.FreeTier = FreeTierPaidOnly
+	}
+	return chain
+}
+
+// NormalizeID accepts positive decimal chain IDs and returns their canonical
+// representation without leading zeroes.
+func NormalizeID(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	value = strings.TrimLeft(value, "0")
+	if value == "" {
+		return "", false
+	}
+	return value, true
+}
+
+func (r *Registry) All() []Chain {
+	if r == nil {
+		return nil
+	}
+	out := append([]Chain(nil), r.chains...)
+	for i := range out {
+		out[i].Aliases = append([]string(nil), out[i].Aliases...)
+	}
+	return out
 }
 
 func IsMainnetID(id string) bool {
 	return id == "1"
+}
+
+func StatusName(status int) string {
+	switch status {
+	case 0:
+		return "offline"
+	case 1:
+		return "ok"
+	case 2:
+		return "degraded"
+	default:
+		return "unknown"
+	}
+}
+
+func slug(name string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			dash = false
+		} else if b.Len() > 0 && !dash {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func legacyPaidOnly(id string) bool {
+	switch id {
+	case "56", "97", "8453", "84532", "10", "11155420", "43114", "43113":
+		return true
+	default:
+		return false
+	}
+}
+
+func legacySymbol(id string) string {
+	switch id {
+	case "1", "11155111", "560048", "8453", "84532", "42161", "421614", "59144", "59141", "81457", "168587773", "10", "11155420", "167000", "167013", "480", "4801", "130", "1301", "2741", "11124", "4326", "6343":
+		return "ETH"
+	case "56", "97", "204", "5611":
+		return "BNB"
+	case "137", "80002":
+		return "POL"
+	case "43114", "43113":
+		return "AVAX"
+	case "199", "1029":
+		return "BTT"
+	case "42220", "11142220":
+		return "CELO"
+	case "252", "2523":
+		return "frxETH"
+	case "100":
+		return "xDAI"
+	case "5000", "5003":
+		return "MNT"
+	case "50", "51":
+		return "XDC"
+	case "33139", "33111":
+		return "APE"
+	case "146", "14601":
+		return "S"
+	case "80094", "80069":
+		return "BERA"
+	case "143", "10143":
+		return "MON"
+	case "999":
+		return "HYPE"
+	case "1329", "1328":
+		return "SEI"
+	default:
+		return ""
+	}
 }

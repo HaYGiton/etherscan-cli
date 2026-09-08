@@ -293,6 +293,13 @@ func TestChainList(t *testing.T) {
 	if len(chains) != 2 || chains[0]["chainname"] != "Ethereum Mainnet" || chains[1]["chainid"] != "8453" {
 		t.Fatalf("unexpected chainlist rows: %v", chains)
 	}
+	entries, err := c.ChainListEntries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Status == nil || *entries[0].Status != 1 || entries[1].ChainID != "8453" {
+		t.Fatalf("unexpected typed chainlist rows: %+v", entries)
+	}
 }
 
 func TestChainListDecodeErrors(t *testing.T) {
@@ -301,6 +308,23 @@ func TestChainListDecodeErrors(t *testing.T) {
 	}
 	if _, err := decodeChainList([]byte(`{"comments":"x","totalcount":0}`)); err == nil {
 		t.Fatal("expected error on missing result field")
+	}
+}
+
+func TestChainListDerivesURLFromBaseWithQuery(t *testing.T) {
+	var gotPath, gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		fmt.Fprint(w, `{"comments":"ok","totalcount":1,"result":[{"chainname":"Ethereum Mainnet","chainid":"1","blockexplorer":"https://etherscan.io","apiurl":"https://api.etherscan.io/v2/api?chainid=1","status":1}]}`)
+	}))
+	defer server.Close()
+
+	c := New(Options{BaseURL: server.URL + "/v2/api?tenant=test", RateLimit: 1000})
+	if _, err := c.ChainList(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v2/chainlist" || gotQuery != "" {
+		t.Fatalf("chainlist URL path=%q query=%q", gotPath, gotQuery)
 	}
 }
 

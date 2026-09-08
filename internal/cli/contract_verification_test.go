@@ -11,8 +11,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/etherscan/etherscan-cli/internal/chains"
 )
 
 const (
@@ -113,6 +111,9 @@ func TestVerificationVariantsSendExpectedForm(t *testing.T) {
 			var got url.Values
 			var query url.Values
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveTestChainList(w, r) {
+					return
+				}
 				if r.Method != http.MethodPost {
 					t.Errorf("method = %s, want POST", r.Method)
 				}
@@ -154,6 +155,7 @@ func TestVerificationVariantsSendExpectedForm(t *testing.T) {
 }
 
 func TestVerifyZkSyncOnlyAllowsAbstractChains(t *testing.T) {
+	registry := testCLIRegistry(t)
 	var spec EndpointSpec
 	for _, candidate := range endpoints() {
 		if strings.HasPrefix(candidate.Use, "verify-zksync ") {
@@ -162,20 +164,20 @@ func TestVerifyZkSyncOnlyAllowsAbstractChains(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"abstract", "abstract-sepolia"} {
-		chain, err := chains.Resolve(name)
+		chain, err := registry.Resolve(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := validateEndpointChain(spec, chain); err != nil {
+		if err := validateEndpointChain(spec, chain, registry); err != nil {
 			t.Errorf("%s rejected: %v", name, err)
 		}
 	}
 	for _, name := range []string{"ethereum", "arbitrum"} {
-		chain, err := chains.Resolve(name)
+		chain, err := registry.Resolve(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := validateEndpointChain(spec, chain); err == nil || !strings.Contains(err.Error(), "Abstract") {
+		if err := validateEndpointChain(spec, chain, registry); err == nil || !strings.Contains(err.Error(), "Abstract") {
 			t.Errorf("%s error = %v, want Abstract restriction", name, err)
 		}
 	}
@@ -184,6 +186,9 @@ func TestVerifyZkSyncOnlyAllowsAbstractChains(t *testing.T) {
 func TestVerifyZkSyncRejectsOtherChainBeforeSubmission(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveTestChainList(w, r) {
+			return
+		}
 		requests++
 		fmt.Fprint(w, `{"status":"1","message":"OK","result":"guid"}`)
 	}))
@@ -212,6 +217,7 @@ func TestVerifyZkSyncRejectsOtherChainBeforeSubmission(t *testing.T) {
 }
 
 func TestVerifyStylusOnlyAllowsArbitrumChains(t *testing.T) {
+	registry := testCLIRegistry(t)
 	var spec EndpointSpec
 	for _, candidate := range endpoints() {
 		if strings.HasPrefix(candidate.Use, "verify-stylus ") {
@@ -220,20 +226,20 @@ func TestVerifyStylusOnlyAllowsArbitrumChains(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"arbitrum", "arbitrum-sepolia"} {
-		chain, err := chains.Resolve(name)
+		chain, err := registry.Resolve(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := validateEndpointChain(spec, chain); err != nil {
+		if err := validateEndpointChain(spec, chain, registry); err != nil {
 			t.Errorf("%s rejected: %v", name, err)
 		}
 	}
 	for _, name := range []string{"ethereum", "abstract"} {
-		chain, err := chains.Resolve(name)
+		chain, err := registry.Resolve(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := validateEndpointChain(spec, chain); err == nil || !strings.Contains(err.Error(), "Arbitrum") {
+		if err := validateEndpointChain(spec, chain, registry); err == nil || !strings.Contains(err.Error(), "Arbitrum") {
 			t.Errorf("%s error = %v, want Arbitrum restriction", name, err)
 		}
 	}
@@ -242,6 +248,9 @@ func TestVerifyStylusOnlyAllowsArbitrumChains(t *testing.T) {
 func TestVerifyStylusRejectsOtherChainBeforeSubmission(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveTestChainList(w, r) {
+			return
+		}
 		requests++
 		fmt.Fprint(w, `{"status":"1","message":"OK","result":"guid"}`)
 	}))
@@ -469,6 +478,9 @@ func TestProxyAndPollWireForms(t *testing.T) {
 			var query url.Values
 			var method string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveTestChainList(w, r) {
+					return
+				}
 				method = r.Method
 				query = r.URL.Query()
 				if r.Method == http.MethodPost {

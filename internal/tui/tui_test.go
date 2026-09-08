@@ -500,7 +500,7 @@ func chainPickerModel(switchChain func(string) (string, string, error)) *model {
 		Chains: []ChainInfo{
 			{Name: "ethereum", DisplayName: "Ethereum Mainnet", ID: "1"},
 			{Name: "polygon", DisplayName: "Polygon Mainnet", ID: "137", Aliases: []string{"matic", "pol"}},
-			{Name: "sepolia", DisplayName: "Sepolia Testnet", ID: "11155111", Testnet: true},
+			{Name: "sepolia", DisplayName: "Sepolia Testnet", ID: "11155111"},
 		},
 		SwitchChain: switchChain,
 	}
@@ -614,8 +614,9 @@ func TestChainPickerAliasesAndErrorReset(t *testing.T) {
 	}
 }
 
-func TestChainPickerOfficialNameAndPaidOnlyLabel(t *testing.T) {
+func TestChainPickerOfficialNameAndStatusLabel(t *testing.T) {
 	m := chainPickerModel(func(string) (string, string, error) { return "", "", nil })
+	m.cfg.Chains[1].Status = "degraded"
 	m.cfg.Chains[1].PaidOnly = true
 	m.openChainPicker()
 	m.chainFilter = "Polygon Mainnet"
@@ -624,8 +625,8 @@ func TestChainPickerOfficialNameAndPaidOnlyLabel(t *testing.T) {
 		t.Fatalf("official display-name filter did not find polygon: %+v", got)
 	}
 	view := m.viewChainPicker()
-	if !strings.Contains(view, "Polygon Mainnet (137)") || !strings.Contains(view, "(paid only)") {
-		t.Fatalf("picker missing official name or tier label:\n%s", view)
+	if !strings.Contains(view, "Polygon Mainnet (137)") || !strings.Contains(view, "(paid only) (degraded)") {
+		t.Fatalf("picker missing official name or status label:\n%s", view)
 	}
 }
 
@@ -868,3 +869,65 @@ func TestWindowIndices(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// The switcher is the only place the chain list is read, so it is where a
+// degraded (compiled-in) list has to be disclosed. Without the notice the list
+// looks authoritative and a missing new chain reads as unsupported.
+func TestChainPickerShowsDegradedListNotice(t *testing.T) {
+	m := chainPickerModel(func(string) (string, string, error) { return "", "", nil })
+	m.openChainPicker()
+	if view := m.viewChainPicker(); strings.Contains(view, "!") {
+		t.Fatalf("picker warned with no notice set:\n%s", view)
+	}
+
+	m.cfg.ChainsNotice = "offline list — newer chains may be missing"
+	view := m.viewChainPicker()
+	if !strings.Contains(view, "newer chains may be missing") {
+		t.Fatalf("picker did not disclose the degraded list:\n%s", view)
+	}
+	// The notice must not displace the list itself.
+	if !strings.Contains(view, "Ethereum Mainnet (1)") {
+		t.Fatalf("notice pushed the chain list out of view:\n%s", view)
+	}
+}
+
+// TestChainPickerFitsTerminal guards the same header-trimmed-off-screen bug as
+// TestBrowseViewFitsTerminal, for the switcher: the degraded-list notice adds rows
+// to the picker's fixed chrome, and the list window has to give them back.
+func TestChainPickerFitsTerminal(t *testing.T) {
+	m := chainPickerModel(func(string) (string, string, error) { return "", "", nil })
+	// chains.Fallback() yields 65 rows, far more than fits at the smaller heights.
+	m.cfg.Chains = make([]ChainInfo, 0, 65)
+	for i := 0; i < 65; i++ {
+		m.cfg.Chains = append(m.cfg.Chains, ChainInfo{
+			Name: fmt.Sprintf("chain%02d", i), DisplayName: fmt.Sprintf("Chain %02d Mainnet", i),
+			ID: fmt.Sprint(i + 1), Status: "unknown",
+		})
+	}
+	m.openChainPicker()
+
+	for _, notice := range []string{"", "offline list — newer chains may be missing"} {
+		m.cfg.ChainsNotice = notice
+		label := "no notice"
+		if notice != "" {
+			label = "with notice"
+		}
+		for _, size := range []struct{ w, h int }{
+			{120, 15}, {120, 20}, {120, 25}, {120, 30}, {120, 40},
+			// Narrow enough that the notice wraps: lipgloss wraps rather than
+			// truncates, so it costs more rows than its one line suggests.
+			{40, 20}, {40, 30},
+		} {
+			m.Update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
+			out := m.View()
+			if lines := strings.Count(out, "\n") + 1; lines > size.h {
+				t.Fatalf("%s at %dx%d: view is %d lines — header would be trimmed off-screen",
+					label, size.w, size.h, lines)
+			}
+			first := strings.SplitN(out, "\n", 2)[0]
+			if !strings.Contains(first, "Etherscan") {
+				t.Fatalf("%s at %dx%d: first line is not the header: %q", label, size.w, size.h, first)
+			}
+		}
+	}
+}

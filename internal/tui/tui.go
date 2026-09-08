@@ -98,6 +98,10 @@ type Config struct {
 	// optional — a nil SwitchChain disables the switcher entirely.
 	Chains      []ChainInfo
 	SwitchChain func(nameOrID string) (name, id string, err error)
+	// ChainsNotice, when set, warns that Chains is the list compiled into this
+	// release rather than the live one. Shown in the switcher, which is the only
+	// place the list is read.
+	ChainsNotice string
 }
 
 // ChainInfo is one selectable chain in the switcher.
@@ -106,8 +110,8 @@ type ChainInfo struct {
 	DisplayName string // official Etherscan supported-chains name
 	ID          string
 	Aliases     []string
-	Testnet     bool
 	PaidOnly    bool
+	Status      string
 }
 
 // Run launches the full-screen explorer and blocks until the user quits.
@@ -766,12 +770,18 @@ func (m model) viewChainPicker() string {
 	var b strings.Builder
 	b.WriteString(headSt.Render("Switch chain") + "\n")
 	b.WriteString(descSt.Render(fmt.Sprintf("current: %s (%s)", m.cfg.ChainName, m.cfg.ChainID)) + "\n\n")
+	if m.cfg.ChainsNotice != "" {
+		b.WriteString(descSt.Render("! "+m.cfg.ChainsNotice) + "\n\n")
+	}
 	b.WriteString(labelSt.Render("filter: ") + m.chainFilter + "\n\n")
 	if len(list) == 0 {
 		b.WriteString(descSt.Render("(no matching chains)") + "\n")
 	} else {
 		visible := 10
 		if m.height > 0 {
+			// 12 is the picker's chrome: 10 rows without ChainsNotice, plus the two
+			// the notice adds. There is no slack left — TestChainPickerFitsTerminal
+			// fails at 11 as soon as a notice is shown.
 			if v := m.height - 12; v >= 1 {
 				visible = v
 			} else {
@@ -793,6 +803,9 @@ func (m model) viewChainPicker() string {
 			suffix := ""
 			if c.PaidOnly {
 				suffix = " (paid only)"
+			}
+			if c.Status == "degraded" || c.Status == "offline" {
+				suffix += " (" + c.Status + ")"
 			}
 			if i == idx {
 				b.WriteString(selSt.Render("› "+line+suffix) + "\n")

@@ -75,6 +75,15 @@ type Result struct {
 	Empty    bool
 }
 
+type ChainListEntry struct {
+	ChainName     string `json:"chainname"`
+	ChainID       string `json:"chainid"`
+	BlockExplorer string `json:"blockexplorer"`
+	APIURL        string `json:"apiurl"`
+	Status        *int   `json:"status"`
+	Comment       string `json:"comment"`
+}
+
 func New(opts Options) *Client {
 	if opts.BaseURL == "" {
 		opts.BaseURL = DefaultBaseURL
@@ -151,8 +160,30 @@ func (c *Client) Get(ctx context.Context, module, action string, params map[stri
 // endpoint that is not module/action-shaped: a bare GET on <base>/chainlist with no
 // query parameters (no API key or chainid required) and a non-envelope response.
 func (c *Client) ChainList(ctx context.Context) (Result, error) {
-	endpoint := strings.TrimSuffix(c.baseURL, "/api") + "/chainlist"
-	return c.do(ctx, http.MethodGet, endpoint, "", true, decodeChainList)
+	endpoint, err := url.Parse(c.baseURL)
+	if err != nil {
+		return Result{}, err
+	}
+	endpoint.Path = strings.TrimSuffix(endpoint.Path, "/api") + "/chainlist"
+	endpoint.RawPath = ""
+	endpoint.RawQuery = ""
+	endpoint.ForceQuery = false
+	endpoint.Fragment = ""
+	return c.do(ctx, http.MethodGet, endpoint.String(), "", true, decodeChainList)
+}
+
+// ChainListEntries returns the typed rows used to construct the CLI's runtime
+// chain registry. The raw ChainList method remains available to the API explorer.
+func (c *Client) ChainListEntries(ctx context.Context) ([]ChainListEntry, error) {
+	result, err := c.ChainList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := DecodeResult[[]ChainListEntry](result.Raw)
+	if err != nil {
+		return nil, fmt.Errorf("decode chain list: %w", err)
+	}
+	return entries, nil
 }
 
 // PostForm submits a write action. module, action, chainid and apikey go in the
