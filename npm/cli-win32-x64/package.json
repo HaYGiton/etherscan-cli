@@ -1,7 +1,7 @@
 {
-  "name": "@etherscan-npm/cli-win32-x64",
+  "name": "@etherscan/cli-win32-x64",
   "version": "0.0.0-development",
-  "description": "Windows x64 binary for @etherscan-npm/cli. Installed automatically as an optional dependency; do not install directly.",
+  "description": "Windows x64 binary for @etherscan/cli. Installed automatically as an optional dependency; do not install directly.",
   "license": "MIT",
   "repository": {
     "type": "git",

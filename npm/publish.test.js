@@ -55,12 +55,12 @@ test("all release targets have npm platform packages", () => {
 });
 
 test("launcher maps every supported Node platform and architecture", () => {
-  assert.equal(platformPackage("darwin", "arm64"), "@etherscan-npm/cli-darwin-arm64");
-  assert.equal(platformPackage("darwin", "x64"), "@etherscan-npm/cli-darwin-x64");
-  assert.equal(platformPackage("linux", "arm64"), "@etherscan-npm/cli-linux-arm64");
-  assert.equal(platformPackage("linux", "x64"), "@etherscan-npm/cli-linux-x64");
-  assert.equal(platformPackage("win32", "arm64"), "@etherscan-npm/cli-win32-arm64");
-  assert.equal(platformPackage("win32", "x64"), "@etherscan-npm/cli-win32-x64");
+  assert.equal(platformPackage("darwin", "arm64"), "@etherscan/cli-darwin-arm64");
+  assert.equal(platformPackage("darwin", "x64"), "@etherscan/cli-darwin-x64");
+  assert.equal(platformPackage("linux", "arm64"), "@etherscan/cli-linux-arm64");
+  assert.equal(platformPackage("linux", "x64"), "@etherscan/cli-linux-x64");
+  assert.equal(platformPackage("win32", "arm64"), "@etherscan/cli-win32-arm64");
+  assert.equal(platformPackage("win32", "x64"), "@etherscan/cli-win32-x64");
   assert.equal(platformPackage("freebsd", "x64"), null);
   assert.equal(Object.keys(PLATFORMS).length, 6);
 });
@@ -199,7 +199,7 @@ test("the tree walk refuses an empty tree instead of passing", () => {
 
 test("umbrella package ships only the launcher and documentation", () => {
   const packageInfo = require("../package.json");
-  assert.equal(packageInfo.name, "@etherscan-npm/cli");
+  assert.equal(packageInfo.name, "@etherscan/cli");
   assert.equal(packageInfo.scripts.postinstall, undefined);
   for (const entry of ["npm/bin/etherscan.js", "npm/platform.js", "README.md", "LICENSE"]) {
     assert.ok(packageInfo.files.includes(entry), `${entry} must stay in package.json files`);
@@ -214,7 +214,7 @@ test("umbrella package ships only the launcher and documentation", () => {
 test("platform manifests enforce the intended os and cpu", () => {
   for (const [key, name] of Object.entries(PLATFORMS)) {
     const [expectedOS, expectedCPU] = key.split(" ");
-    const directory = name.replace("@etherscan-npm/", "");
+    const directory = name.replace("@etherscan/", "");
     const manifest = require(path.join(__dirname, directory, "package.json"));
     assert.equal(manifest.name, name);
     assert.deepEqual(manifest.os, [expectedOS]);
@@ -263,7 +263,7 @@ test("publisher verifies and stages all six release archives before the umbrella
 
     const prepared = preparePackages("1.2.3", dist, stage);
     assert.equal(prepared.length, 7);
-    assert.equal(prepared.at(-1).name, "@etherscan-npm/cli");
+    assert.equal(prepared.at(-1).name, "@etherscan/cli");
     for (const pkg of prepared) {
       const manifest = JSON.parse(fs.readFileSync(path.join(pkg.directory, "package.json"), "utf8"));
       assert.equal(manifest.version, "1.2.3");
