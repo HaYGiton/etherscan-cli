@@ -1,5 +1,5 @@
 {
-  "name": "@etherscan-npm/cli",
+  "name": "@etherscan/cli",
   "version": "0.0.0-development",
   "description": "Etherscan CLI — the official command-line interface (CLI) for the Etherscan API V2. Query EVM blockchain data, inspect transactions, and verify smart contracts.",
   "keywords": [
@@ -51,12 +51,12 @@
     "LICENSE"
   ],
   "optionalDependencies": {
-    "@etherscan-npm/cli-darwin-arm64": "0.0.0-development",
-    "@etherscan-npm/cli-darwin-x64": "0.0.0-development",
-    "@etherscan-npm/cli-linux-arm64": "0.0.0-development",
-    "@etherscan-npm/cli-linux-x64": "0.0.0-development",
-    "@etherscan-npm/cli-win32-arm64": "0.0.0-development",
-    "@etherscan-npm/cli-win32-x64": "0.0.0-development"
+    "@etherscan/cli-darwin-arm64": "0.0.0-development",
+    "@etherscan/cli-darwin-x64": "0.0.0-development",
+    "@etherscan/cli-linux-arm64": "0.0.0-development",
+    "@etherscan/cli-linux-x64": "0.0.0-development",
+    "@etherscan/cli-win32-arm64": "0.0.0-development",
+    "@etherscan/cli-win32-x64": "0.0.0-development"
   },
   "engines": {
     "node": ">=18"

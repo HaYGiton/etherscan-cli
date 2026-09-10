@@ -127,7 +127,7 @@ func (s *Service) Upgrade(ctx context.Context, method, version string, stdout, s
 		return false, fmt.Errorf("unsupported update method %q (use homebrew, npm, or script)", method)
 	}
 	if method == MethodNPM {
-		return false, fmt.Errorf("npm manages this installation; run npm install -g %s@latest", NPMTransitionalPackage)
+		return false, fmt.Errorf("npm manages this installation; run npm install -g %s@latest", NPMCanonicalPackage)
 	}
 	if method == MethodHomebrew {
 		if _, err := s.lookPath()("brew"); err != nil {

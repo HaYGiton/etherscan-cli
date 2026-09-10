@@ -52,7 +52,7 @@ func TestDetectMethod(t *testing.T) {
 func TestNPMUpgradeReturnsPackageManagerInstruction(t *testing.T) {
 	service := NewService()
 	_, err := service.Upgrade(context.Background(), MethodNPM, "1.2.0", &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "npm install -g @etherscan-npm/cli@latest") {
+	if err == nil || !strings.Contains(err.Error(), "npm install -g @etherscan/cli@latest") {
 		t.Fatalf("Upgrade() error = %v, want npm install instruction", err)
 	}
 }
