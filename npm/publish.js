@@ -33,8 +33,15 @@ function parseReleaseTag(tag) {
 }
 
 function run(command, args, options = {}) {
-  const executable = process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
-  const result = spawnSync(executable, args, {
+  let executable = command;
+  let commandArgs = args;
+  if (command === "npm" && process.env.npm_execpath) {
+    executable = process.execPath;
+    commandArgs = [process.env.npm_execpath, ...args];
+  } else if (process.platform === "win32" && command === "npm") {
+    executable = "npm.cmd";
+  }
+  const result = spawnSync(executable, commandArgs, {
     cwd: options.cwd || repositoryRoot,
     encoding: "utf8",
     stdio: options.inherit ? "inherit" : "pipe",
@@ -44,7 +51,7 @@ function run(command, args, options = {}) {
   }
   if (result.status !== 0) {
     const details = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-    throw new Error(`${executable} ${args.join(" ")} failed${details ? `:\n${details}` : ""}`);
+    throw new Error(`${executable} ${commandArgs.join(" ")} failed${details ? `:\n${details}` : ""}`);
   }
   return result.stdout || "";
 }
