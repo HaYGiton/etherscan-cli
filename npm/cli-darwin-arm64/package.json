@@ -10,5 +10,6 @@
   "os": ["darwin"],
   "cpu": ["arm64"],
   "files": ["etherscan"],
+  "bin": { "etherscan-native": "etherscan" },
   "publishConfig": { "access": "public" }
 }
