@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { parseReleaseTag, platforms, preparePackages } = require("./publish");
+const { parseReleaseTag, platforms, preparePackages, packPackages } = require("./publish");
 const { PLATFORMS, platformPackage } = require("./platform");
 const { checkVersion, checkLineEndings } = require("./prepublish-check");
 const { listFiles, checkTree } = require("./check-tarball-eol");
@@ -221,6 +221,11 @@ test("platform manifests enforce the intended os and cpu", () => {
     assert.deepEqual(manifest.cpu, [expectedCPU]);
     assert.equal(manifest.publishConfig.access, "public");
     assert.equal(manifest.version, require("../package.json").version);
+    if (expectedOS === "win32") {
+      assert.equal(manifest.bin, undefined);
+    } else {
+      assert.deepEqual(manifest.bin, { "etherscan-native": "etherscan" });
+    }
   }
 });
 
@@ -273,6 +278,15 @@ test("publisher verifies and stages all six release archives before the umbrella
     );
     for (const dependencyVersion of Object.values(umbrella.optionalDependencies)) {
       assert.equal(dependencyVersion, "1.2.3");
+    }
+
+    // This packs on the current host, including Windows where chmod cannot set
+    // Unix mode bits. packPackages must reject a Unix package unless npm wrote
+    // its native binary into the actual tarball as executable.
+    const packed = packPackages(prepared, path.join(root, "packed"));
+    assert.equal(packed.length, 7);
+    for (const pkg of packed) {
+      assert.ok(fs.existsSync(pkg.tarball), `${pkg.name} tarball must exist`);
     }
 
     const firstArchive = `etherscan_1.2.3_${platforms[0].os}_${platforms[0].arch}.${platforms[0].extension}`;

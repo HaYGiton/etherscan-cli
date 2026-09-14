@@ -102,6 +102,16 @@ function extractBinary(archivePath, platform, destination) {
     fs.copyFileSync(path.join(extractDir, platform.binary), destination);
     if (platform.extension !== "zip") {
       fs.chmodSync(destination, 0o755);
+      // Windows filesystems do not expose Unix execute bits: chmod is a no-op
+      // for them and stat continues to report 0666. The packed-tarball check
+      // below is the cross-platform authority; this staging check is useful
+      // only when the publishing host can represent Unix permissions.
+      if (process.platform !== "win32") {
+        const mode = fs.statSync(destination).mode & 0o777;
+        if ((mode & 0o111) === 0) {
+          throw new Error(`${platform.packageDir}/${platform.binary} is not executable after staging`);
+        }
+      }
     }
   } finally {
     fs.rmSync(extractDir, { recursive: true, force: true });
@@ -141,7 +151,12 @@ function preparePackages(version, distDir, stageRoot) {
     );
     fs.copyFileSync(path.join(repositoryRoot, "LICENSE"), path.join(packageDir, "LICENSE"));
     extractBinary(archivePath, platform, path.join(packageDir, platform.binary));
-    prepared.push({ name: manifest.name, directory: packageDir });
+    prepared.push({
+      name: manifest.name,
+      directory: packageDir,
+      binary: platform.binary,
+      requiresExecutable: platform.extension !== "zip",
+    });
   }
 
   const umbrellaDir = path.join(stageRoot, "cli");
@@ -167,6 +182,59 @@ function preparePackages(version, distDir, stageRoot) {
   return prepared;
 }
 
+function packPackages(packages, packRoot) {
+  fs.mkdirSync(packRoot, { recursive: true });
+
+  return packages.map((pkg) => {
+    // Publishing a directory runs prepublishOnly, but publishing the exact
+    // tarball verified below does not. Preserve that release gate explicitly.
+    if (pkg.name === "@etherscan/cli") {
+      run(process.execPath, [path.join(pkg.directory, "npm", "prepublish-check.js")], {
+        cwd: pkg.directory,
+      });
+    }
+
+    const output = run("npm", [
+      "pack",
+      "--json",
+      "--pack-destination",
+      packRoot,
+      pkg.directory,
+    ]);
+    let results;
+    try {
+      results = JSON.parse(output);
+    } catch (error) {
+      throw new Error(`npm pack returned invalid JSON for ${pkg.name}: ${error.message}`);
+    }
+    if (!Array.isArray(results) || results.length !== 1) {
+      throw new Error(`npm pack must produce exactly one tarball for ${pkg.name}`);
+    }
+
+    const result = results[0];
+    if (!result || typeof result.filename !== "string" || !Array.isArray(result.files)) {
+      throw new Error(`npm pack returned incomplete metadata for ${pkg.name}`);
+    }
+    const tarball = path.resolve(packRoot, result.filename);
+    if (path.dirname(tarball) !== path.resolve(packRoot) || !fs.existsSync(tarball)) {
+      throw new Error(`npm pack did not create the expected tarball for ${pkg.name}`);
+    }
+
+    if (pkg.requiresExecutable) {
+      const binary = result.files.find((entry) => entry.path === pkg.binary);
+      if (!binary || !Number.isInteger(binary.mode)) {
+        throw new Error(`${pkg.name} tarball does not contain mode metadata for ${pkg.binary}`);
+      }
+      if ((binary.mode & 0o111) === 0) {
+        const mode = (binary.mode & 0o777).toString(8).padStart(3, "0");
+        throw new Error(`${pkg.name} tarball contains non-executable ${pkg.binary} (mode ${mode})`);
+      }
+    }
+
+    return { ...pkg, tarball };
+  });
+}
+
 function isPublished(name, version) {
   const executable = process.platform === "win32" ? "npm.cmd" : "npm";
   const result = spawnSync(executable, ["view", `${name}@${version}`, "version", "--json"], {
@@ -184,21 +252,18 @@ function isPublished(name, version) {
 
 function publishPackages(packages, release) {
   for (const pkg of packages) {
-    run("npm", ["pack", "--dry-run", "--json", pkg.directory]);
-  }
-  for (const pkg of packages) {
     if (isPublished(pkg.name, release.version)) {
       console.log(`${pkg.name}@${release.version} is already published; skipping.`);
       continue;
     }
-    const args = ["publish", pkg.directory, "--access", "public"];
+    const args = ["publish", `./${path.basename(pkg.tarball)}`, "--access", "public"];
     if (release.distTag !== "latest") {
       args.push("--tag", release.distTag);
     }
     if (process.env.NPM_PROVENANCE === "true") {
       args.push("--provenance");
     }
-    run("npm", args, { inherit: true });
+    run("npm", args, { cwd: path.dirname(pkg.tarball), inherit: true });
   }
 }
 
@@ -209,7 +274,8 @@ function main() {
   const stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "etherscan-npm-publish-"));
   try {
     const packages = preparePackages(release.version, distDir, stageRoot);
-    publishPackages(packages, release);
+    const packed = packPackages(packages, path.join(stageRoot, "tarballs"));
+    publishPackages(packed, release);
   } finally {
     fs.rmSync(stageRoot, { recursive: true, force: true });
   }
@@ -220,6 +286,7 @@ module.exports = {
   platforms,
   readChecksums,
   preparePackages,
+  packPackages,
 };
 
 if (require.main === module) {
