@@ -62,6 +62,8 @@ brews:
       owner: etherscan
       name: homebrew-etherscan-cli
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      pull_request:
+        enabled: true
     directory: Formula
     homepage: "https://github.com/etherscan/etherscan-cli"
     description: "Command-line client and interactive explorer for the Etherscan V2 API"
